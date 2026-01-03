@@ -1,0 +1,15 @@
+version: "3.8"
+
+services:
+  media-webgui:
+    build: ./media-webgui
+    container_name: media-webgui
+    restart: unless-stopped
+    ports:
+      - "${WEBGUI_PORT:-8080}:8080"
+    env_file:
+      - .env
+    volumes:
+      - ./data/output:/output
+      - ./data/md5:/md5
+      - ./data/ssh:/ssh:ro
