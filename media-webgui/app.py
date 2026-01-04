@@ -18,7 +18,7 @@ from urllib.parse import urlparse
 
 import paramiko
 from fastapi import FastAPI, Form, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 OUTPUT_DIR = os.environ.get("OUTPUT_DIR", "/output").rstrip("/")
@@ -97,6 +97,7 @@ class Job:
     library: str
     proxy: str
     headers: List[str]
+    progress: float
     status: str
     message: str
 
@@ -160,7 +161,6 @@ def proxy_is_usable(proxy: str) -> bool:
             return True
     except OSError:
         return False
-
 
 
 def format_proxy_lines(raw: str, scheme: str) -> str:
@@ -251,24 +251,6 @@ def parse_header_lines(raw: str) -> List[str]:
     return headers
 
 
-
-def parse_header_lines(raw: str) -> List[str]:
-    headers = []
-    for line in (raw or "").splitlines():
-        s = line.strip()
-        if not s or s.startswith("#"):
-            continue
-        if ":" not in s:
-            raise ValueError(f"Invalid header line: {s}")
-        name, value = s.split(":", 1)
-        name = name.strip()
-        value = value.strip()
-        if not name or not value:
-            raise ValueError(f"Invalid header line: {s}")
-        headers.append(f"{name}: {value}")
-    return headers
-
-
 def pick_engine(url: str, forced: str) -> str:
     forced = (forced or "").strip().lower()
     if forced and forced != "auto":
@@ -281,20 +263,49 @@ def pick_engine(url: str, forced: str) -> str:
     return "direct"
 
 
-def run_ytdlp(url: str, out_dir: str, fmt: str, proxy: str):
-    cmd = ["yt-dlp", "-f", fmt, "-o", f"{out_dir}/%(title)s.%(ext)s", url]
+def run_ytdlp(url: str, out_dir: str, fmt: str, proxy: str, progress_cb):
+    cmd = ["yt-dlp", "--newline", "-f", fmt, "-o", f"{out_dir}/%(title)s.%(ext)s", url]
     if proxy:
         cmd += ["--proxy", proxy]
-    subprocess.check_call(cmd)
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    if not proc.stdout:
+        raise RuntimeError("yt-dlp failed to start")
+    progress_re = re.compile(r"\\[download\\]\\s+([\\d.]+)%")
+    for line in proc.stdout:
+        match = progress_re.search(line)
+        if match:
+            progress_cb(float(match.group(1)))
+    ret = proc.wait()
+    if ret != 0:
+        raise subprocess.CalledProcessError(ret, cmd)
 
 
-def run_aria2(url: str, out_dir: str, proxy: str, headers: List[str] | None = None):
-    cmd = ["aria2c", "--dir", out_dir, "--allow-overwrite=true", "--auto-file-renaming=false", url]
+def run_aria2(url: str, out_dir: str, proxy: str, progress_cb, headers: List[str] | None = None):
+    cmd = [
+        "aria2c",
+        "--dir",
+        out_dir,
+        "--allow-overwrite=true",
+        "--auto-file-renaming=false",
+        "--summary-interval=1",
+        url,
+    ]
     if proxy:
         cmd += ["--all-proxy", proxy]
     for header in headers or []:
         cmd += ["--header", header]
-    subprocess.check_call(cmd)
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    if not proc.stdout:
+        raise RuntimeError("aria2c failed to start")
+    percent_re = re.compile(r"\\((\\d+)%\\)")
+    for line in proc.stdout:
+        match = percent_re.search(line)
+        if match:
+            progress_cb(float(match.group(1)))
+    ret = proc.wait()
+    if ret != 0:
+        raise subprocess.CalledProcessError(ret, cmd)
+
 
 
 def md5_file(path: str) -> str:
@@ -409,6 +420,18 @@ def worker(jobid: str):
             header_note = f"Headers={len(headers)}" if headers else "Headers=none"
             job.status = "downloading"
             job.message = f"Engine={engine} Proxy={'none' if not proxy else proxy} {header_note}"
+            job.progress = 0.0
+
+        def update_progress(value: float):
+            with lock:
+                jobs[jobid].progress = max(0.0, min(100.0, value))
+
+        if engine == "ytdlp":
+            run_ytdlp(job.url, OUTPUT_DIR, YTDLP_FORMAT, proxy, update_progress)
+        elif engine == "hoster":
+            run_aria2(job.url, OUTPUT_DIR, proxy, update_progress, headers=headers)
+        else:
+            run_aria2(job.url, OUTPUT_DIR, proxy, update_progress)
 
         if engine == "ytdlp":
             run_ytdlp(job.url, OUTPUT_DIR, YTDLP_FORMAT, proxy)
@@ -459,6 +482,7 @@ def worker(jobid: str):
 
         with lock:
             job.status = "finished"
+            job.progress = 100.0
             job.message = f"OK ({len(new_files)} file(s))"
 
     except Exception as e:
@@ -488,6 +512,9 @@ def render_downloads(error: str = "") -> str:
             f"<td>{j.engine}</td>"
             f"<td>{j.library}</td>"
             f"<td>{'none' if not j.proxy else j.proxy}</td>"
+            f"<td><div class='progress' data-jobid='{j.id}'>"
+            f"<div class='progress-bar' style='width:{j.progress:.1f}%'></div>"
+            f"<span class='progress-text'>{j.progress:.1f}%</span></div></td>"
             f"<td><b>{j.status}</b><br/><small>{j.message}</small></td>"
             f"</tr>"
         )
@@ -544,6 +571,31 @@ def render_downloads(error: str = "") -> str:
       </p>
 
       <table>
+        <thead><tr><th>JobID</th><th>URL</th><th>Engine</th><th>Library</th><th>Proxy</th><th>Progress</th><th>Status</th></tr></thead>
+        <tbody>
+          {rows if rows else "<tr><td colspan='7'><em>No jobs yet.</em></td></tr>"}
+        </tbody>
+      </table>
+      <script>
+        async function refreshProgress() {{
+          try {{
+            const res = await fetch("/jobs");
+            const data = await res.json();
+            data.forEach((job) => {{
+              const el = document.querySelector(`.progress[data-jobid='${{job.id}}']`);
+              if (!el) return;
+              const bar = el.querySelector(".progress-bar");
+              const text = el.querySelector(".progress-text");
+              const pct = Math.max(0, Math.min(100, job.progress || 0));
+              bar.style.width = pct + "%";
+              text.textContent = pct.toFixed(1) + "%";
+            }});
+          }} catch (e) {{
+            console.warn("progress refresh failed", e);
+          }}
+        }}
+        setInterval(refreshProgress, 2000);
+      </script>
         <thead><tr><th>JobID</th><th>URL</th><th>Engine</th><th>Library</th><th>Proxy</th><th>Status</th></tr></thead>
         <tbody>
           {rows if rows else "<tr><td colspan='6'><em>No jobs yet.</em></td></tr>"}
@@ -556,6 +608,19 @@ def render_downloads(error: str = "") -> str:
 @app.get("/", response_class=HTMLResponse)
 def index():
     return HTMLResponse(render_downloads())
+
+
+@app.get("/jobs", response_class=JSONResponse)
+def jobs_status():
+    with lock:
+        payload = [
+            {
+                "id": job.id,
+                "progress": job.progress,
+            }
+            for job in jobs.values()
+        ]
+    return JSONResponse(payload)
 
 
 @app.post("/submit")
@@ -589,6 +654,7 @@ def submit(
             library=library,
             proxy=chosen_proxy,
             headers=header_lines,
+            progress=0.0,
             status="queued",
             message="queued",
         )
