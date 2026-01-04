@@ -7,12 +7,14 @@ import os
 import random
 import re
 import shlex
+import socket
 import subprocess
 import threading
 import time
 from dataclasses import dataclass
 from typing import Dict, List
 from urllib.request import urlopen
+from urllib.parse import urlparse
 
 import paramiko
 from fastapi import FastAPI, Form, Request
@@ -43,6 +45,7 @@ PROXY_SOURCES = {
     "socks4": "https://raw.githubusercontent.com/TheSpeedX/SOCKS-List/master/socks4.txt",
     "http": "https://raw.githubusercontent.com/TheSpeedX/SOCKS-List/master/http.txt",
 }
+PROXY_CHECK_TIMEOUT = float(os.environ.get("PROXY_CHECK_TIMEOUT", "3.0"))
 
 URL_RE = re.compile(r"^https?://", re.I)
 YOUTUBE_RE = re.compile(r"(youtube\.com|youtu\.be)", re.I)
@@ -122,14 +125,42 @@ def parse_proxy_list(raw: str) -> List[str]:
 def pick_proxy(forced_proxy: str = "") -> str:
     global _rr_idx
     if forced_proxy:
-        return forced_proxy.strip()
-    if PROXY_MODE == "off" or not PROXIES:
+        return forced_proxy.strip() if proxy_is_usable(forced_proxy.strip()) else ""
+    with lock:
+        proxies = list(PROXIES)
+    if PROXY_MODE == "off" or not proxies:
         return ""
     if PROXY_MODE == "random":
-        return random.choice(PROXIES)
-    p = PROXIES[_rr_idx % len(PROXIES)]
-    _rr_idx += 1
-    return p
+        random.shuffle(proxies)
+        for candidate in proxies:
+            if proxy_is_usable(candidate):
+                return candidate
+        return ""
+    start_idx = _rr_idx % len(proxies)
+    for offset in range(len(proxies)):
+        idx = (start_idx + offset) % len(proxies)
+        candidate = proxies[idx]
+        if proxy_is_usable(candidate):
+            _rr_idx = idx + 1
+            return candidate
+    return ""
+
+
+def proxy_is_usable(proxy: str) -> bool:
+    proxy = proxy.strip()
+    if not proxy:
+        return False
+    parsed = urlparse(proxy if "://" in proxy else f"http://{proxy}")
+    host = parsed.hostname
+    port = parsed.port
+    if not host or not port:
+        return False
+    try:
+        with socket.create_connection((host, port), timeout=PROXY_CHECK_TIMEOUT):
+            return True
+    except OSError:
+        return False
+
 
 
 def format_proxy_lines(raw: str, scheme: str) -> str:
@@ -179,7 +210,46 @@ def load_proxy_sources() -> List[str]:
     return parse_proxy_list(combined)
 
 
-PROXIES = parse_proxy_list("\n".join([PROXY_LIST_RAW, "\n".join(load_proxy_sources())]))
+PROXIES: List[str] = []
+
+
+def refresh_proxies() -> None:
+    global PROXIES
+    combined = "\n".join([PROXY_LIST_RAW, "\n".join(load_proxy_sources())])
+    updated = parse_proxy_list(combined)
+    with lock:
+        PROXIES = updated
+
+
+def proxy_refresh_loop(interval_seconds: int = 12 * 60 * 60) -> None:
+    while True:
+        try:
+            refresh_proxies()
+        except Exception as exc:
+            print(f"Proxy refresh failed: {exc}")
+        time.sleep(interval_seconds)
+
+
+refresh_proxies()
+threading.Thread(target=proxy_refresh_loop, daemon=True).start()
+
+
+def parse_header_lines(raw: str) -> List[str]:
+    headers = []
+    for line in (raw or "").splitlines():
+        s = line.strip()
+        if not s or s.startswith("#"):
+            continue
+        if ":" not in s:
+            raise ValueError(f"Invalid header line: {s}")
+        name, value = s.split(":", 1)
+        name = name.strip()
+        value = value.strip()
+        if not name or not value:
+            raise ValueError(f"Invalid header line: {s}")
+        headers.append(f"{name}: {value}")
+    return headers
+
 
 
 def parse_header_lines(raw: str) -> List[str]:

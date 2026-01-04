@@ -23,6 +23,7 @@ Danach:
 ## Proxies
 - Proxies werden **nur** an yt-dlp/aria2 übergeben (pro Job), beeinflussen also nicht SFTP/Jellyfin.
 - `PROXY_LIST` enthält eine Zeile pro Proxy: `socks5://IP:PORT`, `http://IP:PORT`, ...
+- Die Proxy-Listen werden 2× täglich aus den TheSpeedX-Quellen geladen und ins richtige Format gebracht.
 
 ## Hoster-Engine
 - Engine `hoster` nutzt **aria2c** und akzeptiert zusätzliche HTTP-Header (z.B. `Cookie:` oder `User-Agent:`) im Formular.
