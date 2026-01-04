@@ -307,6 +307,7 @@ def run_aria2(url: str, out_dir: str, proxy: str, progress_cb, headers: List[str
         raise subprocess.CalledProcessError(ret, cmd)
 
 
+
 def md5_file(path: str) -> str:
     h = hashlib.md5()
     with open(path, "rb") as f:
@@ -431,6 +432,13 @@ def worker(jobid: str):
             run_aria2(job.url, OUTPUT_DIR, proxy, update_progress, headers=headers)
         else:
             run_aria2(job.url, OUTPUT_DIR, proxy, update_progress)
+
+        if engine == "ytdlp":
+            run_ytdlp(job.url, OUTPUT_DIR, YTDLP_FORMAT, proxy)
+        elif engine == "hoster":
+            run_aria2(job.url, OUTPUT_DIR, proxy, headers=headers)
+        else:
+            run_aria2(job.url, OUTPUT_DIR, proxy)
 
         new_files = list_output_files(before)
         if not new_files:
@@ -588,6 +596,11 @@ def render_downloads(error: str = "") -> str:
         }}
         setInterval(refreshProgress, 2000);
       </script>
+        <thead><tr><th>JobID</th><th>URL</th><th>Engine</th><th>Library</th><th>Proxy</th><th>Status</th></tr></thead>
+        <tbody>
+          {rows if rows else "<tr><td colspan='6'><em>No jobs yet.</em></td></tr>"}
+        </tbody>
+      </table>
     </body></html>
     """
 
