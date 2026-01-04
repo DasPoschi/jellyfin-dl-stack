@@ -162,6 +162,7 @@ def proxy_is_usable(proxy: str) -> bool:
         return False
 
 
+
 def format_proxy_lines(raw: str, scheme: str) -> str:
     scheme = scheme.strip().lower()
     if scheme not in {"socks5", "socks4", "http", "https"}:
@@ -231,6 +232,24 @@ def proxy_refresh_loop(interval_seconds: int = 12 * 60 * 60) -> None:
 
 refresh_proxies()
 threading.Thread(target=proxy_refresh_loop, daemon=True).start()
+
+
+def parse_header_lines(raw: str) -> List[str]:
+    headers = []
+    for line in (raw or "").splitlines():
+        s = line.strip()
+        if not s or s.startswith("#"):
+            continue
+        if ":" not in s:
+            raise ValueError(f"Invalid header line: {s}")
+        name, value = s.split(":", 1)
+        name = name.strip()
+        value = value.strip()
+        if not name or not value:
+            raise ValueError(f"Invalid header line: {s}")
+        headers.append(f"{name}: {value}")
+    return headers
+
 
 
 def parse_header_lines(raw: str) -> List[str]:
