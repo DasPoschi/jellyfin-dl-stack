@@ -96,6 +96,7 @@ class Job:
     engine: str
     library: str
     proxy: str
+    proxy_forced: bool
     headers: List[str]
     progress: float
     status: str
@@ -127,8 +128,7 @@ def pick_proxy(forced_proxy: str = "") -> str:
     global _rr_idx
     if forced_proxy:
         return forced_proxy.strip() if proxy_is_usable(forced_proxy.strip()) else ""
-    with lock:
-        proxies = list(PROXIES)
+    proxies = snapshot_proxies()
     if PROXY_MODE == "off" or not proxies:
         return ""
     if PROXY_MODE == "random":
@@ -221,6 +221,11 @@ def refresh_proxies() -> None:
         PROXIES = updated
 
 
+def snapshot_proxies() -> List[str]:
+    with lock:
+        return list(PROXIES)
+
+
 def proxy_refresh_loop(interval_seconds: int = 12 * 60 * 60) -> None:
     while True:
         try:
@@ -305,7 +310,6 @@ def run_aria2(url: str, out_dir: str, proxy: str, progress_cb, headers: List[str
     ret = proc.wait()
     if ret != 0:
         raise subprocess.CalledProcessError(ret, cmd)
-
 
 
 def md5_file(path: str) -> str:
@@ -415,6 +419,8 @@ def worker(jobid: str):
         engine = pick_engine(job.url, job.engine)
         proxy = job.proxy
         headers = job.headers
+        proxy_forced = job.proxy_forced
+        proxy_candidates = []
 
         with lock:
             header_note = f"Headers={len(headers)}" if headers else "Headers=none"
@@ -428,17 +434,33 @@ def worker(jobid: str):
 
         if engine == "ytdlp":
             run_ytdlp(job.url, OUTPUT_DIR, YTDLP_FORMAT, proxy, update_progress)
-        elif engine == "hoster":
-            run_aria2(job.url, OUTPUT_DIR, proxy, update_progress, headers=headers)
         else:
-            run_aria2(job.url, OUTPUT_DIR, proxy, update_progress)
+            if proxy:
+                if proxy_forced:
+                    proxy_candidates = [proxy]
+                else:
+                    proxy_list = snapshot_proxies()
+                    proxy_candidates = [proxy] + [p for p in proxy_list if p != proxy]
+            else:
+                proxy_candidates = [""]
 
-        if engine == "ytdlp":
-            run_ytdlp(job.url, OUTPUT_DIR, YTDLP_FORMAT, proxy)
-        elif engine == "hoster":
-            run_aria2(job.url, OUTPUT_DIR, proxy, headers=headers)
-        else:
-            run_aria2(job.url, OUTPUT_DIR, proxy)
+            for idx, candidate in enumerate(proxy_candidates):
+                try:
+                    if engine == "hoster":
+                        run_aria2(job.url, OUTPUT_DIR, candidate, update_progress, headers=headers)
+                    else:
+                        run_aria2(job.url, OUTPUT_DIR, candidate, update_progress)
+                    break
+                except subprocess.CalledProcessError as exc:
+                    if idx == len(proxy_candidates) - 1:
+                        raise
+                    with lock:
+                        job.message = f"Proxy failed, trying next ({idx + 1}/{len(proxy_candidates) - 1})"
+                except Exception as exc:
+                    if idx == len(proxy_candidates) - 1:
+                        raise
+                    with lock:
+                        job.message = f"Proxy failed, trying next ({idx + 1}/{len(proxy_candidates) - 1})"
 
         new_files = list_output_files(before)
         if not new_files:
@@ -596,11 +618,6 @@ def render_downloads(error: str = "") -> str:
         }}
         setInterval(refreshProgress, 2000);
       </script>
-        <thead><tr><th>JobID</th><th>URL</th><th>Engine</th><th>Library</th><th>Proxy</th><th>Status</th></tr></thead>
-        <tbody>
-          {rows if rows else "<tr><td colspan='6'><em>No jobs yet.</em></td></tr>"}
-        </tbody>
-      </table>
     </body></html>
     """
 
@@ -653,6 +670,7 @@ def submit(
             engine=engine,
             library=library,
             proxy=chosen_proxy,
+            proxy_forced=bool(proxy.strip()),
             headers=header_lines,
             progress=0.0,
             status="queued",
