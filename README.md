@@ -18,7 +18,7 @@ Danach:
 1) `.env.example` -> `.env` kopieren und Werte setzen.
 2) SSH Key ablegen: `data/ssh/id_ed25519` (chmod 600)
 3) `docker compose up -d --build`
-4) WebUI: `http://<host>:8080`
+4) WebUI: `http://<host>:8081`
 
 ## Proxies
 - Proxies werden **nur** an yt-dlp/aria2 übergeben (pro Job), beeinflussen also nicht SFTP/Jellyfin.
