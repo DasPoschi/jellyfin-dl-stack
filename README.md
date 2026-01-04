@@ -3,6 +3,7 @@
 Dieses Projekt lädt Links über:
 - **yt-dlp** (YouTube & unterstützte Video-Plattformen)
 - **aria2c** (direkte HTTP/HTTPS-Links, z.B. .mkv/.mp4)
+- **hoster** (aria2c mit optionalen HTTP-Headern, z.B. Cookies)
 
 Danach:
 - erzeugt es eine **MD5** und speichert sie als Sidecar
@@ -17,8 +18,12 @@ Danach:
 1) `.env.example` -> `.env` kopieren und Werte setzen.
 2) SSH Key ablegen: `data/ssh/id_ed25519` (chmod 600)
 3) `docker compose up -d --build`
-4) WebUI: `http://<host>:8080`
+4) WebUI: `http://<host>:8081`
 
 ## Proxies
 - Proxies werden **nur** an yt-dlp/aria2 übergeben (pro Job), beeinflussen also nicht SFTP/Jellyfin.
 - `PROXY_LIST` enthält eine Zeile pro Proxy: `socks5://IP:PORT`, `http://IP:PORT`, ...
+
+## Hoster-Engine
+- Engine `hoster` nutzt **aria2c** und akzeptiert zusätzliche HTTP-Header (z.B. `Cookie:` oder `User-Agent:`) im Formular.
+- Ein Header pro Zeile. Leere Zeilen/Kommentare werden ignoriert.

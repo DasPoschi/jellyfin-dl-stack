@@ -3,10 +3,10 @@ version: "3.8"
 services:
   media-webgui:
     build: ./media-webgui
-    container_name: media-webgui
+    container_name: jf-dl-media-webgui
     restart: unless-stopped
     ports:
-      - "${WEBGUI_PORT:-8080}:8080"
+      - "${WEBGUI_PORT:-8081}:8080"
     env_file:
       - .env
     volumes:
