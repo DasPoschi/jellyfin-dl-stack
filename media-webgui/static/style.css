@@ -11,3 +11,6 @@ th { background:#fbfbfb; text-align:left; }
 code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; background:#f2f2f2; padding:2px 4px; border-radius:4px; }
 .hint { color:#555; font-size: 12px; margin-top: 10px; }
 .error { color:#b00020; font-weight: 700; }
+.progress { position: relative; height: 18px; background: #eee; border-radius: 10px; overflow: hidden; min-width: 120px; }
+.progress-bar { height: 100%; background: #4b7bec; transition: width 0.4s ease; }
+.progress-text { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 12px; color: #fff; font-weight: 600; text-shadow: 0 1px 2px rgba(0,0,0,0.35); }
